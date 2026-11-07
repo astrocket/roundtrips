@@ -14,7 +14,7 @@ Rails 개발 환경에서 페이지를 열면 왼쪽 아래에 배지가 뜨고,
 ```ruby
 # Gemfile
 group :development do
-  gem "roundtrips", github: "astrocket/roundtrips", tag: "v0.1.0"
+  gem "roundtrips", github: "astrocket/roundtrips", branch: "main"
 end
 ```
 
@@ -69,11 +69,13 @@ bundle install
 bundle exec rspec
 ```
 
-앱에서 고치며 보려면 앱 쪽에서 로컬 경로를 씁니다.
+앱에서 고치며 보려면 앱 쪽에서 로컬 저장소를 가리킵니다. Gemfile 이 `branch:` 로 참조해야 동작합니다(`tag:` 는 Bundler 가 거부합니다).
 
 ```sh
-bundle config local.roundtrips ../roundtrips
+bundle config set --local local.roundtrips ../roundtrips
 ```
+
+이 상태에서는 `Gemfile.lock` 의 revision 이 로컬 저장소의 커밋으로 바뀝니다. gem 을 푸시한 뒤 `bundle config unset --local local.roundtrips && bundle update roundtrips` 로 원격 커밋을 잠그고 커밋합니다.
 
 ## 라이선스
 
