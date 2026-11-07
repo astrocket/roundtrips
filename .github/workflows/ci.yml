@@ -7,7 +7,7 @@ on:
 
 jobs:
   rspec:
-    # ubuntu-latest(26.04) 는 Ruby 4.0 바이너리가 없어 24.04 로 고정한다.
+    # ubuntu-latest (26.04) has no Ruby 4.0 binaries yet, so pin 24.04.
     runs-on: ubuntu-24.04
     strategy:
       matrix:

@@ -4,8 +4,8 @@ Gem::Specification.new do |spec|
   spec.name = "roundtrips"
   spec.version = Roundtrips::VERSION
   spec.authors = ["astrocket"]
-  spec.summary = "Rails 개발 환경 페이지에 PostgreSQL·Redis·캐시 호출과 N+1 을 보여 주는 패널"
-  spec.description = "요청, 비동기 요청, Sidekiq 잡마다 실행된 SQL, Redis 명령, Rails 캐시 호출을 코드 위치와 함께 모아 페이지 아래쪽 패널로 보여 준다."
+  spec.summary = "A development panel that shows every PostgreSQL, Redis and cache round trip, and N+1s, on your Rails pages"
+  spec.description = "Collects the SQL, Redis commands and Rails cache calls made by each request, async request and Sidekiq job, with the line of app code that made them, and shows them in a panel at the bottom of the page."
   spec.homepage = "https://github.com/astrocket/roundtrips"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2"
