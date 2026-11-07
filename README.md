@@ -1,5 +1,9 @@
 # roundtrips
 
+![페이지 요청의 N+1 을 펼친 패널](docs/panel.png)
+
+![같은 요청이 넣은 Sidekiq 잡을 묶어 본 패널](docs/panel-job-batch.png)
+
 Rails 개발 환경에서 페이지를 열면 왼쪽 아래에 배지가 뜨고, 그 요청이 저장소에 다녀온 **왕복**을 모두 보여 줍니다.
 
 - PostgreSQL 쿼리, Redis 명령, Rails 캐시 호출을 코드 위치(`파일:줄`)와 함께 모읍니다.
