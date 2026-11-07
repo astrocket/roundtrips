@@ -35,14 +35,95 @@
   ));
   const ms = (value) => (value >= 100 ? value.toFixed(0) : value.toFixed(1)) + "ms";
 
+  // 화면 문구. 언어는 서버가 정한다(Roundtrips.config.locale, 기본은 앱의 I18n.default_locale).
+  const MESSAGES = {
+    en: {
+      redisText: "Redis command", cacheName: "Rails cache", cacheText: "Cache key",
+      kind: { page: "Page", request: "Request", job: "Job", batch: "Job batch" },
+      duplicate: "Dup", outsideApp: "Ran outside app code", outsideLocation: "(outside app code)",
+      changedValues: "Changed values (up to 10)", callPath: "Call path",
+      copy: "Copy", copied: "Copied", copyFailed: "Failed",
+      rowCopyTitle: "Copy the query, location and count as a prompt",
+      traceCopyTitle: "Copy where this came from and every call in it as a prompt",
+      requestMemory: "In-memory", queryCache: "Query cache", viaCache: "via cache",
+      times: (n) => `${n}×`,
+      heading: {
+        n_plus_one: (name, count, total) => `[N+1 · ${name}] repeated ${count}× from the same location, ${total} total`,
+        duplicate: (name, count, total) => `[Duplicate · ${name}] same values repeated ${count}× here, ${total} total`,
+        job_repeat: (name, count, total) => `[Job repeat · ${name}] ran in every job, ${count}× total, ${total}`,
+        normal: (name, count, total, cached) => `[${name}] ran ${count}×${cached}, ${total} total`,
+      },
+      storeOff: "store off", none: "none",
+      places: { n_plus_one: (n) => `N+1 ×${n}`, job_repeat: (n) => `job repeat ×${n}`, duplicate: (n) => `duplicate ×${n}` },
+      startedFrom: "Started from", enqueuedAt: "Enqueued at", status: "Status", jobTotal: "Job total", time: "Time",
+      calls: "Calls", issues: "Issues", location: "Location", result: "Result",
+      callList: "Calls (issues first):", noCalls: "No calls",
+      count: (n) => `${n}`,
+      batchHeading: (job, n, total) => `[Job repeat] ${job} ran ${n} times from one request, ${total} total`,
+      statusText: { done: "done", failed: "failed" },
+      n1Stat: (n) => `N+1 ×${n}`, noN1: "No N+1", dupStat: (n) => `Dup ×${n}`,
+      queryCacheStat: (n) => `Query cache ${n}`, memoryStat: (n) => `In-memory ${n}`,
+      memoryTitle: "Cache calls answered from request memory without reaching the store",
+      cacheOffTitle: "The development Rails cache is null_store. Turn it on with bin/rails dev:cache.",
+      cacheOff: "store off", total: { batch: "Job total", job: "Job", other: "Request" },
+      jobsStat: (n) => `Jobs ×${n}`, repeatStat: (n) => `Repeat ×${n}`,
+      empty: "No queries to show.", failed: "Failed", collapse: "Collapse", expand: (n) => `Expand ${n}`,
+      traceHint: "Requests and jobs started from this page show up here.",
+      pillTitle: "Open roundtrips", async: (n) => `Async ${n}`,
+      views: { issues: "Issues first", order: "Timeline", slow: "Slowest" }, all: (n) => `All ${n}`,
+      panelLabel: "roundtrips", close: "Close", tracesLabel: "Requests and jobs",
+      enqueuedFrom: (origin) => `enqueued at ${origin}`, search: "Filter by SQL, key, file, model",
+    },
+    ko: {
+      redisText: "Redis 명령", cacheName: "Rails 캐시", cacheText: "캐시 키",
+      kind: { page: "페이지", request: "요청", job: "잡", batch: "잡 묶음" },
+      duplicate: "중복", outsideApp: "앱 코드 밖에서 실행됨", outsideLocation: "(앱 코드 밖)",
+      changedValues: "바뀐 값 (최대 10개)", callPath: "호출 경로",
+      copy: "복사", copied: "복사됨", copyFailed: "실패",
+      rowCopyTitle: "쿼리, 코드 위치, 횟수를 프롬프트용으로 복사",
+      traceCopyTitle: "어디서 온 호출인지와 안의 호출 전체를 프롬프트용으로 복사",
+      requestMemory: "요청 메모리", queryCache: "쿼리 캐시", viaCache: "캐시 경유",
+      times: (n) => `${n}회`,
+      heading: {
+        n_plus_one: (name, count, total) => `[N+1 · ${name}] 같은 위치에서 ${count}회 반복, 합계 ${total}`,
+        duplicate: (name, count, total) => `[중복 · ${name}] 같은 값으로 반복 실행, 이 위치에서 ${count}회, 합계 ${total}`,
+        job_repeat: (name, count, total) => `[잡 반복 · ${name}] 잡마다 실행되어 합계 ${count}회, ${total}`,
+        normal: (name, count, total, cached) => `[${name}] ${count}회 실행${cached}, 합계 ${total}`,
+      },
+      storeOff: "저장소 꺼짐", none: "없음",
+      places: { n_plus_one: (n) => `N+1 ${n}곳`, job_repeat: (n) => `잡 반복 ${n}곳`, duplicate: (n) => `중복 ${n}곳` },
+      startedFrom: "시작 페이지", enqueuedAt: "잡을 넣은 위치", status: "상태", jobTotal: "잡 합계", time: "시간",
+      calls: "호출", issues: "문제", location: "코드 위치", result: "결과",
+      callList: "호출 목록 (문제가 있는 것부터):", noCalls: "호출 없음",
+      count: (n) => `${n}건`,
+      batchHeading: (job, n, total) => `[잡 반복] ${job} 잡이 한 요청에서 ${n}번 실행, 합계 ${total}`,
+      statusText: { done: "완료", failed: "실패" },
+      n1Stat: (n) => `N+1 ${n}곳`, noN1: "N+1 없음", dupStat: (n) => `중복 ${n}곳`,
+      queryCacheStat: (n) => `쿼리 캐시 ${n}건`, memoryStat: (n) => `요청 메모리 ${n}건`,
+      memoryTitle: "요청 안에서 메모리로 끝나 저장소까지 가지 않은 캐시 호출",
+      cacheOffTitle: "개발 서버의 Rails 캐시가 null_store 입니다. bin/rails dev:cache 로 켤 수 있습니다.",
+      cacheOff: "저장소 꺼짐", total: { batch: "잡 합계", job: "잡", other: "요청" },
+      jobsStat: (n) => `잡 ×${n}`, repeatStat: (n) => `반복 ${n}곳`,
+      empty: "표시할 쿼리가 없습니다.", failed: "실패", collapse: "접기", expand: (n) => `${n}개 펼치기`,
+      traceHint: "이 페이지에서 나가는 요청과 잡이 여기에 쌓입니다.",
+      pillTitle: "쿼리 패널 열기", async: (n) => `비동기 ${n}`,
+      views: { issues: "문제 먼저", order: "실행 순서", slow: "느린 순" }, all: (n) => `전체 ${n}`,
+      panelLabel: "쿼리 패널", close: "닫기", tracesLabel: "요청 목록",
+      enqueuedFrom: (origin) => `넣은 곳 ${origin}`, search: "SQL, 키, 파일, 모델로 찾기",
+    },
+  };
+  const T = MESSAGES[page.locale] || MESSAGES.en;
+  const where = (item) => item.location || T.outsideLocation;
+  const statusText = (status) => T.statusText[status] || status;
+
   const KEYWORDS = /\b(SELECT|DISTINCT|FROM|WHERE|AND|OR|NOT|IN|IS|NULL|ORDER BY|GROUP BY|HAVING|LIMIT|OFFSET|INNER JOIN|LEFT OUTER JOIN|LEFT JOIN|JOIN|ON|AS|ASC|DESC|INSERT INTO|VALUES|UPDATE|SET|DELETE FROM|RETURNING|COUNT|EXISTS|WITH|CASE|WHEN|THEN|ELSE|END)\b/g;
   const SOURCE = {
     pg: { label: "PG", name: "PostgreSQL", text: "SQL" },
-    redis: { label: "Redis", name: "Redis", text: "Redis 명령" },
-    cache: { label: "Cache", name: "Rails 캐시", text: "캐시 키" },
+    redis: { label: "Redis", name: "Redis", text: T.redisText },
+    cache: { label: "Cache", name: T.cacheName, text: T.cacheText },
   };
   const cacheOff = page.cache_store === "NullStore";
-  const KIND_LABEL = { page: "페이지", request: "요청", job: "잡", batch: "잡 묶음" };
+  const KIND_LABEL = T.kind;
   const highlight = (sql) => escapeHtml(sql)
     .replace(/&quot;([^&]+?)&quot;/g, '<span class="ident">"$1"</span>')
     .replace(KEYWORDS, '<span class="kw">$1</span>');
@@ -50,29 +131,29 @@
 
   const KIND = {
     n_plus_one: { label: "N+1", className: "tag-n1" },
-    duplicate: { label: "중복", className: "tag-dup" },
+    duplicate: { label: T.duplicate, className: "tag-dup" },
   };
 
   const matches = (item) => {
     if (state.source !== "all" && item.source !== state.source) return false;
     if (!state.filter) return true;
     const needle = state.filter.toLowerCase();
-    return (item.sql + " " + item.location + " " + item.name).toLowerCase().includes(needle);
+    return (item.sql + " " + where(item) + " " + item.name).toLowerCase().includes(needle);
   };
 
   const detail = (item, id) => {
     if (!state.expanded.has(id)) return "";
     const frames = item.frames.length
       ? item.frames.map((frame, index) => `<li class="${index === 0 ? "first" : ""}">${escapeHtml(frame)}</li>`).join("")
-      : "<li>앱 코드 밖에서 실행됨</li>";
+      : `<li>${T.outsideApp}</li>`;
     const samples = item.bind_samples && item.bind_samples.length > 1
-      ? `<h4>바뀐 값 (최대 10개)</h4><code class="binds">${escapeHtml(item.bind_samples.map((binds) => JSON.stringify(binds.length === 1 ? binds[0] : binds)).join(", "))}</code>`
+      ? `<h4>${T.changedValues}</h4><code class="binds">${escapeHtml(item.bind_samples.map((binds) => JSON.stringify(binds.length === 1 ? binds[0] : binds)).join(", "))}</code>`
       : "";
     return `<div class="detail">
-      <div class="detail-head"><h4>${SOURCE[item.source].text}</h4><button class="copy" data-copy="${escapeHtml(item.literal_sql)}">복사</button></div>
+      <div class="detail-head"><h4>${SOURCE[item.source].text}</h4><button class="copy" data-copy="${escapeHtml(item.literal_sql)}">${T.copy}</button></div>
       <pre>${item.source === "pg" ? highlight(pretty(item.literal_sql)) : escapeHtml(item.literal_sql)}</pre>
       ${samples}
-      <h4>호출 경로</h4>
+      <h4>${T.callPath}</h4>
       <ol>${frames}</ol>
     </div>`;
   };
@@ -83,31 +164,27 @@
       <button class="line" data-toggle="${id}" aria-expanded="${state.expanded.has(id)}">
         <span class="tagcell">${tag ? `<span class="tag ${tag.className}">${tag.label}</span>` : ""}</span>
         <span class="main">
-          <span class="where"><span class="src src-${item.source}">${SOURCE[item.source].label}</span><span class="name">${escapeHtml(item.name)}</span><span class="loc">${escapeHtml(item.location)}</span></span>
+          <span class="where"><span class="src src-${item.source}">${SOURCE[item.source].label}</span><span class="name">${escapeHtml(item.name)}</span><span class="loc">${escapeHtml(where(item))}</span></span>
           <code class="sql">${item.source === "pg" ? highlight(item.sql.replace(/\s+/g, " ")) : escapeHtml(item.sql)}</code>
         </span>
         <span class="meta">${meta}</span>
         ${timeline ? `<span class="timeline"><i style="left:${timeline.left}%;width:${timeline.width}%"></i></span>` : ""}
         ${bar === undefined ? "" : `<span class="bar"><i style="width:${bar}%"></i></span>`}
       </button>
-      <button class="rowcopy" data-copy-row="${id}" title="쿼리, 코드 위치, 횟수를 프롬프트용으로 복사">복사</button>
+      <button class="rowcopy" data-copy-row="${id}" title="${T.rowCopyTitle}">${T.copy}</button>
       ${detail(item, id)}
     </div>`;
   };
 
-  const memoryLabel = (item) => (item.source === "cache" ? "요청 메모리" : "쿼리 캐시");
+  const memoryLabel = (item) => (item.source === "cache" ? T.requestMemory : T.queryCache);
   const hitText = (hits) => (cacheOff ? "" : Object.entries(hits || {}).map(([name, count]) => `${name} ${count}`).join(", "));
   const hitTag = (text) => (text ? `<em class="${text.startsWith("miss") ? "miss" : "hit"}">${escapeHtml(text)}</em>` : "");
 
   const groupHeading = (group) => {
     const source = SOURCE[group.source];
     const total = ms(group.total_ms);
-    const cached = group.cached_count ? `, ${memoryLabel(group)} ${group.cached_count}회` : "";
-    return {
-      n_plus_one: `[N+1 · ${source.name}] 같은 위치에서 ${group.count}회 반복, 합계 ${total}`,
-      duplicate: `[중복 · ${source.name}] 같은 값으로 반복 실행, 이 위치에서 ${group.count}회, 합계 ${total}`,
-      job_repeat: `[잡 반복 · ${source.name}] 잡마다 실행되어 합계 ${group.count}회, ${total}`,
-    }[group.kind] || `[${source.name}] ${group.count}회 실행${cached}, 합계 ${total}`;
+    const cached = group.cached_count ? `, ${memoryLabel(group)} ${T.times(group.cached_count)}` : "";
+    return (T.heading[group.kind] || T.heading.normal)(source.name, group.count, total, cached);
   };
 
   const sampleText = (group) => group.bind_samples.map((binds) => JSON.stringify(binds.length === 1 ? binds[0] : binds)).join(", ");
@@ -115,21 +192,21 @@
   // 왼쪽 목록에서 복사: 어디서 온 호출인지와 그 안의 호출 전체를 한 번에 담는다.
   const tracePrompt = (trace) => {
     const { pg, redis, cache } = trace.sources;
-    const cacheResult = cacheOff ? " (저장소 꺼짐)" : ` (hit ${trace.cache_hits} / miss ${trace.cache_misses})`;
+    const cacheResult = cacheOff ? ` (${T.storeOff})` : ` (hit ${trace.cache_hits} / miss ${trace.cache_misses})`;
     const issues = [
-      trace.n_plus_one_count && `N+1 ${trace.n_plus_one_count}곳`,
-      trace.repeat_count && `잡 반복 ${trace.repeat_count}곳`,
-      trace.duplicate_count && `중복 ${trace.duplicate_count}곳`,
-    ].filter(Boolean).join(", ") || "없음";
+      trace.n_plus_one_count && T.places.n_plus_one(trace.n_plus_one_count),
+      trace.repeat_count && T.places.job_repeat(trace.repeat_count),
+      trace.duplicate_count && T.places.duplicate(trace.duplicate_count),
+    ].filter(Boolean).join(", ") || T.none;
 
     const head = [
       `[${KIND_LABEL[trace.kind]}] ${trace.label}`,
-      trace.kind === "page" ? null : `시작 페이지: ${page.label}`,
-      trace.origin ? `잡을 넣은 위치: ${trace.origin}` : null,
-      `상태: ${trace.status}`,
-      `${trace.kind === "batch" ? "잡 합계" : "시간"}: ${ms(trace.total_ms)}`,
-      `호출: PG ${pg.count}건 ${ms(pg.ms)}, Redis ${redis.count}건 ${ms(redis.ms)}, Cache ${cache.count}건 ${ms(cache.ms)}${cacheResult}`,
-      `문제: ${issues}`,
+      trace.kind === "page" ? null : `${T.startedFrom}: ${page.label}`,
+      trace.origin ? `${T.enqueuedAt}: ${trace.origin}` : null,
+      `${T.status}: ${statusText(trace.status)}`,
+      `${trace.kind === "batch" ? T.jobTotal : T.time}: ${ms(trace.total_ms)}`,
+      `${T.calls}: PG ${T.count(pg.count)} ${ms(pg.ms)}, Redis ${T.count(redis.count)} ${ms(redis.ms)}, Cache ${T.count(cache.count)} ${ms(cache.ms)}${cacheResult}`,
+      `${T.issues}: ${issues}`,
     ].filter(Boolean).join("\n");
 
     const body = trace.groups.map((group, index) => {
@@ -137,15 +214,15 @@
       const frames = group.kind === "normal" ? [] : group.frames.slice(0, 4);
       return [
         `${index + 1}. ${groupHeading(group)}`,
-        `   코드 위치: ${group.location}`,
-        hits ? `   결과: ${hits}` : null,
-        group.bind_samples.length > 1 ? `   바뀐 값 (최대 10개): ${sampleText(group)}` : null,
+        `   ${T.location}: ${where(group)}`,
+        hits ? `   ${T.result}: ${hits}` : null,
+        group.bind_samples.length > 1 ? `   ${T.changedValues}: ${sampleText(group)}` : null,
         `   ${SOURCE[group.source].text}: ${group.literal_sql.replace(/\s+/g, " ").trim()}`,
-        frames.length ? `   호출 경로:\n${frames.map((frame) => `     - ${frame}`).join("\n")}` : null,
+        frames.length ? `   ${T.callPath}:\n${frames.map((frame) => `     - ${frame}`).join("\n")}` : null,
       ].filter(Boolean).join("\n");
     }).join("\n\n");
 
-    return `${head}\n\n호출 목록 (문제가 있는 것부터):\n\n${body || "호출 없음"}`;
+    return `${head}\n\n${T.callList}\n\n${body || T.noCalls}`;
   };
 
   // 프롬프트에 그대로 붙여넣어 디버깅할 수 있는 형태로 만든다.
@@ -157,19 +234,19 @@
     const source = SOURCE[group.source];
     const hits = hitText(group.hits);
     const heading = groupHeading(group);
-    const samples = group.bind_samples.length > 1 ? `\n\n바뀐 값 (최대 10개): ${sampleText(group)}` : "";
+    const samples = group.bind_samples.length > 1 ? `\n\n${T.changedValues}: ${sampleText(group)}` : "";
     const frames = item.frames.length
-      ? `\n\n호출 경로:\n${item.frames.map((frame, position) => `${position + 1}. ${frame}`).join("\n")}`
+      ? `\n\n${T.callPath}:\n${item.frames.map((frame, position) => `${position + 1}. ${frame}`).join("\n")}`
       : "";
 
     const body = group.source === "pg" ? pretty(item.literal_sql) : item.literal_sql;
-    const hitLine = hits ? `\n결과: ${hits}` : "";
+    const hitLine = hits ? `\n${T.result}: ${hits}` : "";
 
-    const origin = data.kind === "page" ? "" : `\n시작 페이지: ${page.label}`;
-    const enqueued = data.origin ? `\n잡을 넣은 위치: ${data.origin}` : "";
-    const batch = data.kind === "batch" ? `[잡 반복] ${data.job} 잡이 한 요청에서 ${data.job_count}번 실행, 합계 ${ms(data.total_ms)}\n` : "";
+    const origin = data.kind === "page" ? "" : `\n${T.startedFrom}: ${page.label}`;
+    const enqueued = data.origin ? `\n${T.enqueuedAt}: ${data.origin}` : "";
+    const batch = data.kind === "batch" ? `${T.batchHeading(data.job, data.job_count, ms(data.total_ms))}\n` : "";
 
-    return `${batch}${heading}\n${KIND_LABEL[data.kind]}: ${data.label}${origin}${enqueued}\n코드 위치: ${item.location}${hitLine}\n\n${source.text}:\n${body}${samples}${frames}`;
+    return `${batch}${heading}\n${KIND_LABEL[data.kind]}: ${data.label}${origin}${enqueued}\n${T.location}: ${where(item)}${hitLine}\n\n${source.text}:\n${body}${samples}${frames}`;
   };
 
   const flash = (button, text) => {
@@ -182,8 +259,8 @@
 
   const copy = (button, text) => {
     const done = navigator.clipboard?.writeText(text);
-    if (!done) return flash(button, "실패");
-    done.then(() => flash(button, "복사됨"), () => flash(button, "실패"));
+    if (!done) return flash(button, T.copyFailed);
+    done.then(() => flash(button, T.copied), () => flash(button, T.copyFailed));
   };
 
   // sort 를 주면 잡 묶음용이다. 묶음은 어느 보기든 호출을 한 줄씩만 보여 줘서 ×N 이 합계로만 읽히게 한다.
@@ -196,7 +273,7 @@
 
     return list.map(({ group, index }) => {
       const cached = group.cached_count ? `<em>${memoryLabel(group)} ${group.cached_count}</em>` : "";
-      const via = group.via_cache ? "<em>캐시 경유</em>" : "";
+      const via = group.via_cache ? `<em>${T.viaCache}</em>` : "";
       return row({
         id: `g${index}`,
         item: group,
@@ -220,7 +297,7 @@
       id: `q${index}`,
       item: query,
       kind: query.kind,
-      meta: `${query.cached ? `<em>${memoryLabel(query)}</em>` : ""}${query.via_cache ? "<em>캐시 경유</em>" : ""}${cacheOff || query.cached ? "" : hitTag(query.hit)}<strong>${ms(query.ms)}</strong>`,
+      meta: `${query.cached ? `<em>${memoryLabel(query)}</em>` : ""}${query.via_cache ? `<em>${T.viaCache}</em>` : ""}${cacheOff || query.cached ? "" : hitTag(query.hit)}<strong>${ms(query.ms)}</strong>`,
       timeline: {
         left: Math.min((query.offset_ms / total) * 100, 99.5),
         width: Math.max((query.ms / total) * 100, 0.5),
@@ -230,19 +307,19 @@
 
   const summary = () => {
     const n1 = data.n_plus_one_count
-      ? `<span class="stat bad">N+1 ${data.n_plus_one_count}곳</span>`
-      : '<span class="stat good">N+1 없음</span>';
-    const dup = data.duplicate_count ? `<span class="stat warn">중복 ${data.duplicate_count}곳</span>` : "";
+      ? `<span class="stat bad">${T.n1Stat(data.n_plus_one_count)}</span>`
+      : `<span class="stat good">${T.noN1}</span>`;
+    const dup = data.duplicate_count ? `<span class="stat warn">${T.dupStat(data.duplicate_count)}</span>` : "";
     const { pg, redis, cache } = data.sources;
-    const queryCache = data.cached_count ? `<span class="stat">쿼리 캐시 ${data.cached_count}건</span>` : "";
-    const memory = data.in_memory_count ? `<span class="stat" title="요청 안에서 메모리로 끝나 저장소까지 가지 않은 캐시 호출">요청 메모리 ${data.in_memory_count}건</span>` : "";
+    const queryCache = data.cached_count ? `<span class="stat">${T.queryCacheStat(data.cached_count)}</span>` : "";
+    const memory = data.in_memory_count ? `<span class="stat" title="${T.memoryTitle}">${T.memoryStat(data.in_memory_count)}</span>` : "";
     const cacheStat = cacheOff
-      ? `<span class="stat warn" title="개발 서버의 Rails 캐시가 null_store 입니다. bin/rails dev:cache 로 켤 수 있습니다.">Cache ${cache.count}건 · 저장소 꺼짐</span>`
-      : `<span class="stat">Cache ${cache.count}건 ${ms(cache.ms)} · hit ${data.cache_hits} / miss ${data.cache_misses}</span>`;
-    const total = data.kind === "batch" ? "잡 합계" : data.kind === "job" ? "잡" : "요청";
-    const jobs = data.kind === "batch" ? `<span class="stat repeat">잡 ×${data.job_count}</span>` : "";
-    const repeats = data.repeat_count ? `<span class="stat repeat">반복 ${data.repeat_count}곳</span>` : "";
-    return `${jobs}${repeats}${n1}${dup}<span class="stat">PG ${pg.count}건 ${ms(pg.ms)}</span><span class="stat">Redis ${redis.count}건 ${ms(redis.ms)}</span>${cacheStat}${memory}${queryCache}<span class="stat">${total} ${ms(data.total_ms)}</span>`;
+      ? `<span class="stat warn" title="${T.cacheOffTitle}">Cache ${T.count(cache.count)} · ${T.cacheOff}</span>`
+      : `<span class="stat">Cache ${T.count(cache.count)} ${ms(cache.ms)} · hit ${data.cache_hits} / miss ${data.cache_misses}</span>`;
+    const total = T.total[data.kind] || T.total.other;
+    const jobs = data.kind === "batch" ? `<span class="stat repeat">${T.jobsStat(data.job_count)}</span>` : "";
+    const repeats = data.repeat_count ? `<span class="stat repeat">${T.repeatStat(data.repeat_count)}</span>` : "";
+    return `${jobs}${repeats}${n1}${dup}<span class="stat">PG ${T.count(pg.count)} ${ms(pg.ms)}</span><span class="stat">Redis ${T.count(redis.count)} ${ms(redis.ms)}</span>${cacheStat}${memory}${queryCache}<span class="stat">${total} ${ms(data.total_ms)}</span>`;
   };
 
   const list = () => {
@@ -256,7 +333,7 @@
     const target = root.querySelector(".list");
     if (!target) return;
     const html = list();
-    target.innerHTML = html || '<p class="empty">표시할 쿼리가 없습니다.</p>';
+    target.innerHTML = html || `<p class="empty">${T.empty}</p>`;
   };
 
   // 같은 요청이 넣은 같은 잡은 묶어서 반복으로 보여 준다. 잡을 나눈 건 의도일 수 있어 N+1 과 구분한다.
@@ -322,7 +399,7 @@
       label: `${job} ×${members.length}`,
       origin: members[0].origin,
       parent: members[0].parent,
-      status: members.some((member) => member.status === "실패") ? "실패" : "완료",
+      status: members.some((member) => member.status === "failed") ? "failed" : "done",
       started_wall_ms: startedAt,
       total_ms: sum((member) => member.total_ms),
       span_ms: Math.max(...members.map((member) => member.started_wall_ms - startedAt + member.total_ms)),
@@ -360,18 +437,18 @@
 
   const findTrace = (id) => traces.find((trace) => trace.id === id) || displayItems().find((trace) => trace.id === id);
 
-  const traceCopy = (trace) => `<button class="trace-copy" data-copy-trace="${escapeHtml(trace.id)}" title="어디서 온 호출인지와 안의 호출 전체를 프롬프트용으로 복사">복사</button>`;
+  const traceCopy = (trace) => `<button class="trace-copy" data-copy-trace="${escapeHtml(trace.id)}" title="${T.traceCopyTitle}">${T.copy}</button>`;
 
   const batchItem = (batch) => {
     const open = state.openBatches.has(batch.id);
     const members = open ? batch.members.map((member) => traceItem(member, true)).join("") : "";
     return `<div class="batch">
       <button class="trace ${batch.id === data.id ? "on" : ""} ${batch.n_plus_one_count ? "has-n1" : "has-repeat"}" data-trace="${escapeHtml(batch.id)}">
-        <span class="trace-top"><span class="kind kind-job">잡</span><span class="tag tag-repeat">×${batch.job_count}</span>${batch.n_plus_one_count ? `<span class="tag tag-n1">N+1 ${batch.n_plus_one_count}</span>` : ""}${batch.status === "실패" ? '<span class="tag tag-n1">실패</span>' : ""}<span class="trace-ms">${ms(batch.total_ms)}</span></span>
+        <span class="trace-top"><span class="kind kind-job">${KIND_LABEL.job}</span><span class="tag tag-repeat">×${batch.job_count}</span>${batch.n_plus_one_count ? `<span class="tag tag-n1">N+1 ${batch.n_plus_one_count}</span>` : ""}${batch.status === "failed" ? `<span class="tag tag-n1">${T.failed}</span>` : ""}<span class="trace-ms">${ms(batch.total_ms)}</span></span>
         <span class="trace-label">${escapeHtml(batch.job)}</span>
         <span class="trace-counts">PG ${batch.sources.pg.count} · Redis ${batch.sources.redis.count} · Cache ${batch.sources.cache.count}</span>
       </button>
-      <button class="batch-toggle" data-batch="${escapeHtml(batch.id)}" aria-expanded="${open}">${open ? "접기" : `${batch.job_count}개 펼치기`}</button>
+      <button class="batch-toggle" data-batch="${escapeHtml(batch.id)}" aria-expanded="${open}">${open ? T.collapse : T.expand(batch.job_count)}</button>
       ${traceCopy(batch)}
       ${members}
     </div>`;
@@ -381,7 +458,7 @@
     if (trace.kind === "batch") return batchItem(trace);
 
     const n1 = trace.n_plus_one_count ? `<span class="tag tag-n1">N+1 ${trace.n_plus_one_count}</span>` : "";
-    const failed = trace.status === "실패" || trace.status >= 500 ? '<span class="tag tag-n1">실패</span>' : "";
+    const failed = trace.status === "failed" || trace.status >= 500 ? `<span class="tag tag-n1">${T.failed}</span>` : "";
     return `<div class="trace-wrap"><button class="trace ${member ? "member" : ""} ${trace.id === data.id ? "on" : ""} ${trace.n_plus_one_count ? "has-n1" : ""}" data-trace="${trace.id}">
       <span class="trace-top"><span class="kind kind-${trace.kind}">${KIND_LABEL[trace.kind]}</span>${n1}${failed}<span class="trace-ms">${ms(trace.total_ms)}</span></span>
       <span class="trace-label">${escapeHtml(trace.label)}</span>
@@ -392,7 +469,7 @@
   const renderTraces = () => {
     const target = root.querySelector(".traces");
     if (!target) return;
-    const hint = traces.length < 2 ? '<p class="trace-empty">이 페이지에서 나가는 요청과 잡이 여기에 쌓입니다.</p>' : "";
+    const hint = traces.length < 2 ? `<p class="trace-empty">${T.traceHint}</p>` : "";
     target.innerHTML = displayItems().map((item) => traceItem(item)).join("") + hint;
   };
 
@@ -400,35 +477,35 @@
     const n1 = traces.reduce((sum, trace) => sum + trace.n_plus_one_count, 0);
     const repeats = displayItems().filter((item) => item.kind === "batch");
     const async = traces.length - 1;
-    return `<button class="pill ${n1 ? "pill-bad" : ""}" data-action="toggle" title="쿼리 패널 열기">
+    return `<button class="pill ${n1 ? "pill-bad" : ""}" data-action="toggle" title="${T.pillTitle}">
       ${n1 ? `<span class="pill-n1">N+1 ${n1}</span>` : ""}
       ${repeats.map((batch) => `<span class="pill-repeat">×${batch.job_count}</span>`).join("")}
       <span>PG ${page.sources.pg.count}</span><span class="dim">${ms(page.sources.pg.ms)}</span>
       <span>Redis ${page.sources.redis.count}</span><span>Cache ${page.sources.cache.count}</span>
-      ${async ? `<span class="pill-async">비동기 ${async}</span>` : ""}
+      ${async ? `<span class="pill-async">${T.async(async)}</span>` : ""}
     </button>`;
   };
 
   const render = () => {
     const pill = pillHtml();
-    const views = [["issues", "문제 먼저"], ["order", "실행 순서"], ["slow", "느린 순"]]
+    const views = Object.entries(T.views)
       .map(([key, label]) => `<button class="${state.view === key ? "on" : ""}" data-view="${key}">${label}</button>`).join("");
     const total = data.queries.filter((query) => !query.cached).length;
-    const sources = [["all", `전체 ${total}`], ...Object.entries(SOURCE).map(([key, source]) => [key, `${source.label} ${data.sources[key].count}`])]
+    const sources = [["all", T.all(total)], ...Object.entries(SOURCE).map(([key, source]) => [key, `${source.label} ${data.sources[key].count}`])]
       .map(([key, label]) => `<button class="${state.source === key ? "on" : ""}" data-source="${key}">${label}</button>`).join("");
-    const panel = state.open ? `<section class="panel" aria-label="쿼리 패널">
+    const panel = state.open ? `<section class="panel" aria-label="${T.panelLabel}">
       <header>
-        <div class="title"><strong>${KIND_LABEL[data.kind]}</strong><code>${escapeHtml(data.label)}</code>${data.origin ? `<code class="origin">넣은 곳 ${escapeHtml(data.origin)}</code>` : ""}</div>
+        <div class="title"><strong>${KIND_LABEL[data.kind]}</strong><code>${escapeHtml(data.label)}</code>${data.origin ? `<code class="origin">${escapeHtml(T.enqueuedFrom(data.origin))}</code>` : ""}</div>
         <div class="stats">${summary()}</div>
-        <button class="close" data-action="toggle" aria-label="닫기">×</button>
+        <button class="close" data-action="toggle" aria-label="${T.close}">×</button>
       </header>
       <div class="body">
-        <nav class="traces" aria-label="요청 목록"></nav>
+        <nav class="traces" aria-label="${T.tracesLabel}"></nav>
         <div class="content">
           <div class="tools">
             <div class="views">${views}</div>
             <div class="views">${sources}</div>
-            <input type="search" placeholder="SQL, 키, 파일, 모델로 찾기" value="${escapeHtml(state.filter)}">
+            <input type="search" placeholder="${T.search}" value="${escapeHtml(state.filter)}">
           </div>
           <div class="list"></div>
         </div>

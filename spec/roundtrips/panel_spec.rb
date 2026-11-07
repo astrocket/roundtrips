@@ -260,7 +260,7 @@ RSpec.describe Roundtrips::Panel do
         end
 
         event = described_class.events(page_key, 0).sole
-        expect(event).to include("kind" => "job", "label" => "NotifyJob", "status" => "완료")
+        expect(event).to include("kind" => "job", "label" => "NotifyJob", "status" => "done")
         expect(event.dig("sources", "pg", "count")).to eq(1)
       end
 
@@ -291,7 +291,7 @@ RSpec.describe Roundtrips::Panel do
         job = { "class" => "Wrapper", "roundtrips_page" => page_key }
 
         expect { described_class::SidekiqServerRecorder.new.call(nil, job, "default") { raise "터짐" } }.to raise_error("터짐")
-        expect(described_class.events(page_key, 0).sole).to include("status" => "실패")
+        expect(described_class.events(page_key, 0).sole).to include("status" => "failed")
       end
 
       it "페이지 표식이 없는 잡은 기록 없이 그대로 실행한다" do

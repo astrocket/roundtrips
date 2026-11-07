@@ -30,7 +30,8 @@ module Roundtrips
     REDIS_CACHE_FRAME = "active_support/cache/redis_cache_store"
 
     Query = Struct.new(:source, :name, :sql, :binds, :ms, :offset_ms, :cached, :frames, :shape, :hit, :via_cache, :identity, keyword_init: true) do
-      def location = frames.first&.sub(/:in .*/, "") || "(앱 코드 밖)"
+      # 앱 코드 밖의 호출은 nil 이다. 표시 문구는 패널이 언어에 맞춰 채운다.
+      def location = frames.first&.sub(/:in .*/, "")
       def select? = sql.match?(/\A\s*(SELECT|WITH)\b/i)
       def exact_key = [source, name, identity || sql, binds]
       def fingerprint = shape || Panel.fingerprint(sql)
@@ -108,11 +109,11 @@ module Roundtrips
         return yield unless page_key.to_s.match?(PAGE_KEY)
 
         log = new_log(page_key)
-        status = "완료"
+        status = "done"
         begin
           with_log(log) { yield }
         rescue Exception # rubocop:disable Lint/RescueException
-          status = "실패"
+          status = "failed"
           raise
         ensure
           store(log, kind: "job", label: job["wrapped"] || job["class"], status: status,
@@ -206,7 +207,7 @@ module Roundtrips
         log.queries << Query.new(
           source: "cache",
           name: "cache #{operation}",
-          sql: clean_text(keys.size > 1 ? "#{keys.size}개: #{keys.first(3).join(", ")}" : keys.first, MAX_SQL_LENGTH),
+          sql: clean_text(keys.size > 1 ? "×#{keys.size}: #{keys.first(3).join(", ")}" : keys.first, MAX_SQL_LENGTH),
           binds: [],
           ms: event.duration,
           offset_ms: [log.elapsed_ms - event.duration, 0].max,
@@ -512,7 +513,8 @@ module Roundtrips
 
       payload = self.class.payload_for(log, path: request.fullpath, total_ms: log.elapsed_ms).merge(
         id: log.id, kind: "page", label: request.fullpath, status: status,
-        page_key: log.page_key, started_wall_ms: log.wall_ms, events_path: EVENTS_PATH
+        page_key: log.page_key, started_wall_ms: log.wall_ms, events_path: EVENTS_PATH,
+        locale: Roundtrips.config.locale
       )
       html = html.dup.insert(position, panel_html(payload))
       headers["content-length"] = html.bytesize.to_s if headers.key?("content-length")
