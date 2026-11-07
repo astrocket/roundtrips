@@ -1,0 +1,651 @@
+<div id="roundtrips-host" data-turbo-temporary style="all: initial"></div>
+<script type="application/json" id="roundtrips-data">__ROUNDTRIPS_DATA__</script>
+<script>
+(() => {
+  const host = document.getElementById("roundtrips-host");
+  const source = document.getElementById("roundtrips-data");
+  if (!host || !source || host.shadowRoot) return;
+
+  const page = JSON.parse(source.textContent);
+  let data = page;
+  let traces = [page];
+  const root = host.attachShadow({ mode: "open" });
+  const OPEN_KEY = "roundtrips-open";
+  const VIEW_KEY = "roundtrips-view-v2";
+  const SOURCE_KEY = "roundtrips-source";
+
+  const stored = (key, fallback) => {
+    try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
+  };
+  const store = (key, value) => {
+    try { localStorage.setItem(key, value); } catch {}
+  };
+
+  const state = {
+    open: stored(OPEN_KEY, "0") === "1",
+    view: stored(VIEW_KEY, "order"),
+    source: stored(SOURCE_KEY, "all"),
+    filter: "",
+    expanded: new Set(),
+    openBatches: new Set(),
+  };
+
+  const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+  const ms = (value) => (value >= 100 ? value.toFixed(0) : value.toFixed(1)) + "ms";
+
+  const KEYWORDS = /\b(SELECT|DISTINCT|FROM|WHERE|AND|OR|NOT|IN|IS|NULL|ORDER BY|GROUP BY|HAVING|LIMIT|OFFSET|INNER JOIN|LEFT OUTER JOIN|LEFT JOIN|JOIN|ON|AS|ASC|DESC|INSERT INTO|VALUES|UPDATE|SET|DELETE FROM|RETURNING|COUNT|EXISTS|WITH|CASE|WHEN|THEN|ELSE|END)\b/g;
+  const SOURCE = {
+    pg: { label: "PG", name: "PostgreSQL", text: "SQL" },
+    redis: { label: "Redis", name: "Redis", text: "Redis 명령" },
+    cache: { label: "Cache", name: "Rails 캐시", text: "캐시 키" },
+  };
+  const cacheOff = page.cache_store === "NullStore";
+  const KIND_LABEL = { page: "페이지", request: "요청", job: "잡", batch: "잡 묶음" };
+  const highlight = (sql) => escapeHtml(sql)
+    .replace(/&quot;([^&]+?)&quot;/g, '<span class="ident">"$1"</span>')
+    .replace(KEYWORDS, '<span class="kw">$1</span>');
+  const pretty = (sql) => sql.includes("\n") ? sql.trim() : sql.replace(/\s+(FROM|WHERE|INNER JOIN|LEFT OUTER JOIN|LEFT JOIN|ORDER BY|GROUP BY|HAVING|LIMIT|RETURNING)\b/g, "\n$1");
+
+  const KIND = {
+    n_plus_one: { label: "N+1", className: "tag-n1" },
+    duplicate: { label: "중복", className: "tag-dup" },
+  };
+
+  const matches = (item) => {
+    if (state.source !== "all" && item.source !== state.source) return false;
+    if (!state.filter) return true;
+    const needle = state.filter.toLowerCase();
+    return (item.sql + " " + item.location + " " + item.name).toLowerCase().includes(needle);
+  };
+
+  const detail = (item, id) => {
+    if (!state.expanded.has(id)) return "";
+    const frames = item.frames.length
+      ? item.frames.map((frame, index) => `<li class="${index === 0 ? "first" : ""}">${escapeHtml(frame)}</li>`).join("")
+      : "<li>앱 코드 밖에서 실행됨</li>";
+    const samples = item.bind_samples && item.bind_samples.length > 1
+      ? `<h4>바뀐 값 (최대 10개)</h4><code class="binds">${escapeHtml(item.bind_samples.map((binds) => JSON.stringify(binds.length === 1 ? binds[0] : binds)).join(", "))}</code>`
+      : "";
+    return `<div class="detail">
+      <div class="detail-head"><h4>${SOURCE[item.source].text}</h4><button class="copy" data-copy="${escapeHtml(item.literal_sql)}">복사</button></div>
+      <pre>${item.source === "pg" ? highlight(pretty(item.literal_sql)) : escapeHtml(item.literal_sql)}</pre>
+      ${samples}
+      <h4>호출 경로</h4>
+      <ol>${frames}</ol>
+    </div>`;
+  };
+
+  const row = ({ id, item, kind, meta, bar, timeline, repeat }) => {
+    const tag = kind === "job_repeat" ? { label: `×${repeat}`, className: "tag-repeat" } : KIND[kind];
+    return `<div class="row ${kind}" data-id="${id}">
+      <button class="line" data-toggle="${id}" aria-expanded="${state.expanded.has(id)}">
+        <span class="tagcell">${tag ? `<span class="tag ${tag.className}">${tag.label}</span>` : ""}</span>
+        <span class="main">
+          <span class="where"><span class="src src-${item.source}">${SOURCE[item.source].label}</span><span class="name">${escapeHtml(item.name)}</span><span class="loc">${escapeHtml(item.location)}</span></span>
+          <code class="sql">${item.source === "pg" ? highlight(item.sql.replace(/\s+/g, " ")) : escapeHtml(item.sql)}</code>
+        </span>
+        <span class="meta">${meta}</span>
+        ${timeline ? `<span class="timeline"><i style="left:${timeline.left}%;width:${timeline.width}%"></i></span>` : ""}
+        ${bar === undefined ? "" : `<span class="bar"><i style="width:${bar}%"></i></span>`}
+      </button>
+      <button class="rowcopy" data-copy-row="${id}" title="쿼리, 코드 위치, 횟수를 프롬프트용으로 복사">복사</button>
+      ${detail(item, id)}
+    </div>`;
+  };
+
+  const memoryLabel = (item) => (item.source === "cache" ? "요청 메모리" : "쿼리 캐시");
+  const hitText = (hits) => (cacheOff ? "" : Object.entries(hits || {}).map(([name, count]) => `${name} ${count}`).join(", "));
+  const hitTag = (text) => (text ? `<em class="${text.startsWith("miss") ? "miss" : "hit"}">${escapeHtml(text)}</em>` : "");
+
+  const groupHeading = (group) => {
+    const source = SOURCE[group.source];
+    const total = ms(group.total_ms);
+    const cached = group.cached_count ? `, ${memoryLabel(group)} ${group.cached_count}회` : "";
+    return {
+      n_plus_one: `[N+1 · ${source.name}] 같은 위치에서 ${group.count}회 반복, 합계 ${total}`,
+      duplicate: `[중복 · ${source.name}] 같은 값으로 반복 실행, 이 위치에서 ${group.count}회, 합계 ${total}`,
+      job_repeat: `[잡 반복 · ${source.name}] 잡마다 실행되어 합계 ${group.count}회, ${total}`,
+    }[group.kind] || `[${source.name}] ${group.count}회 실행${cached}, 합계 ${total}`;
+  };
+
+  const sampleText = (group) => group.bind_samples.map((binds) => JSON.stringify(binds.length === 1 ? binds[0] : binds)).join(", ");
+
+  // 왼쪽 목록에서 복사: 어디서 온 호출인지와 그 안의 호출 전체를 한 번에 담는다.
+  const tracePrompt = (trace) => {
+    const { pg, redis, cache } = trace.sources;
+    const cacheResult = cacheOff ? " (저장소 꺼짐)" : ` (hit ${trace.cache_hits} / miss ${trace.cache_misses})`;
+    const issues = [
+      trace.n_plus_one_count && `N+1 ${trace.n_plus_one_count}곳`,
+      trace.repeat_count && `잡 반복 ${trace.repeat_count}곳`,
+      trace.duplicate_count && `중복 ${trace.duplicate_count}곳`,
+    ].filter(Boolean).join(", ") || "없음";
+
+    const head = [
+      `[${KIND_LABEL[trace.kind]}] ${trace.label}`,
+      trace.kind === "page" ? null : `시작 페이지: ${page.label}`,
+      trace.origin ? `잡을 넣은 위치: ${trace.origin}` : null,
+      `상태: ${trace.status}`,
+      `${trace.kind === "batch" ? "잡 합계" : "시간"}: ${ms(trace.total_ms)}`,
+      `호출: PG ${pg.count}건 ${ms(pg.ms)}, Redis ${redis.count}건 ${ms(redis.ms)}, Cache ${cache.count}건 ${ms(cache.ms)}${cacheResult}`,
+      `문제: ${issues}`,
+    ].filter(Boolean).join("\n");
+
+    const body = trace.groups.map((group, index) => {
+      const hits = hitText(group.hits);
+      const frames = group.kind === "normal" ? [] : group.frames.slice(0, 4);
+      return [
+        `${index + 1}. ${groupHeading(group)}`,
+        `   코드 위치: ${group.location}`,
+        hits ? `   결과: ${hits}` : null,
+        group.bind_samples.length > 1 ? `   바뀐 값 (최대 10개): ${sampleText(group)}` : null,
+        `   ${SOURCE[group.source].text}: ${group.literal_sql.replace(/\s+/g, " ").trim()}`,
+        frames.length ? `   호출 경로:\n${frames.map((frame) => `     - ${frame}`).join("\n")}` : null,
+      ].filter(Boolean).join("\n");
+    }).join("\n\n");
+
+    return `${head}\n\n호출 목록 (문제가 있는 것부터):\n\n${body || "호출 없음"}`;
+  };
+
+  // 프롬프트에 그대로 붙여넣어 디버깅할 수 있는 형태로 만든다.
+  const promptText = (id) => {
+    const index = Number(id.slice(1));
+    const isGroup = id.startsWith("g");
+    const group = isGroup ? data.groups[index] : data.groups[data.queries[index].group];
+    const item = isGroup ? group : data.queries[index];
+    const source = SOURCE[group.source];
+    const hits = hitText(group.hits);
+    const heading = groupHeading(group);
+    const samples = group.bind_samples.length > 1 ? `\n\n바뀐 값 (최대 10개): ${sampleText(group)}` : "";
+    const frames = item.frames.length
+      ? `\n\n호출 경로:\n${item.frames.map((frame, position) => `${position + 1}. ${frame}`).join("\n")}`
+      : "";
+
+    const body = group.source === "pg" ? pretty(item.literal_sql) : item.literal_sql;
+    const hitLine = hits ? `\n결과: ${hits}` : "";
+
+    const origin = data.kind === "page" ? "" : `\n시작 페이지: ${page.label}`;
+    const enqueued = data.origin ? `\n잡을 넣은 위치: ${data.origin}` : "";
+    const batch = data.kind === "batch" ? `[잡 반복] ${data.job} 잡이 한 요청에서 ${data.job_count}번 실행, 합계 ${ms(data.total_ms)}\n` : "";
+
+    return `${batch}${heading}\n${KIND_LABEL[data.kind]}: ${data.label}${origin}${enqueued}\n코드 위치: ${item.location}${hitLine}\n\n${source.text}:\n${body}${samples}${frames}`;
+  };
+
+  const flash = (button, text) => {
+    const original = button.dataset.label || button.textContent;
+    button.dataset.label = original;
+    button.textContent = text;
+    clearTimeout(button.flashTimer);
+    button.flashTimer = setTimeout(() => { button.textContent = original; }, 1200);
+  };
+
+  const copy = (button, text) => {
+    const done = navigator.clipboard?.writeText(text);
+    if (!done) return flash(button, "실패");
+    done.then(() => flash(button, "복사됨"), () => flash(button, "실패"));
+  };
+
+  // sort 를 주면 잡 묶음용이다. 묶음은 어느 보기든 호출을 한 줄씩만 보여 줘서 ×N 이 합계로만 읽히게 한다.
+  const groupRows = (sort) => {
+    const max = Math.max(...data.groups.map((group) => group.total_ms), 0.01);
+    const span = Math.max(data.span_ms || data.total_ms, 0.01);
+    const list = data.groups.map((group, index) => ({ group, index })).filter(({ group }) => matches(group));
+    if (sort === "order") list.sort((a, b) => a.group.first_offset_ms - b.group.first_offset_ms);
+    if (sort === "slow") list.sort((a, b) => b.group.total_ms - a.group.total_ms);
+
+    return list.map(({ group, index }) => {
+      const cached = group.cached_count ? `<em>${memoryLabel(group)} ${group.cached_count}</em>` : "";
+      const via = group.via_cache ? "<em>캐시 경유</em>" : "";
+      return row({
+        id: `g${index}`,
+        item: group,
+        kind: group.kind,
+        meta: `${group.count > 1 && group.kind !== "job_repeat" ? `<b class="${data.kind === "batch" ? "repeat" : ""}">×${group.count}</b>` : ""}${cached}${via}${hitTag(hitText(group.hits))}<strong>${ms(group.total_ms)}</strong>`,
+        bar: sort === "order" ? undefined : (group.total_ms / max) * 100,
+        timeline: sort === "order" ? {
+          left: Math.min((group.first_offset_ms / span) * 100, 99.5),
+          width: Math.max(((group.last_end_ms - group.first_offset_ms) / span) * 100, 0.5),
+        } : undefined,
+        repeat: group.count,
+      });
+    }).join("");
+  };
+
+  const queryRows = (sorted) => {
+    const total = Math.max(data.span_ms || data.total_ms, 0.01);
+    const list = data.queries.map((query, index) => ({ query, index })).filter(({ query }) => matches(query));
+    if (sorted) list.sort((a, b) => b.query.ms - a.query.ms);
+    return list.map(({ query, index }) => row({
+      id: `q${index}`,
+      item: query,
+      kind: query.kind,
+      meta: `${query.cached ? `<em>${memoryLabel(query)}</em>` : ""}${query.via_cache ? "<em>캐시 경유</em>" : ""}${cacheOff || query.cached ? "" : hitTag(query.hit)}<strong>${ms(query.ms)}</strong>`,
+      timeline: {
+        left: Math.min((query.offset_ms / total) * 100, 99.5),
+        width: Math.max((query.ms / total) * 100, 0.5),
+      },
+    })).join("");
+  };
+
+  const summary = () => {
+    const n1 = data.n_plus_one_count
+      ? `<span class="stat bad">N+1 ${data.n_plus_one_count}곳</span>`
+      : '<span class="stat good">N+1 없음</span>';
+    const dup = data.duplicate_count ? `<span class="stat warn">중복 ${data.duplicate_count}곳</span>` : "";
+    const { pg, redis, cache } = data.sources;
+    const queryCache = data.cached_count ? `<span class="stat">쿼리 캐시 ${data.cached_count}건</span>` : "";
+    const memory = data.in_memory_count ? `<span class="stat" title="요청 안에서 메모리로 끝나 저장소까지 가지 않은 캐시 호출">요청 메모리 ${data.in_memory_count}건</span>` : "";
+    const cacheStat = cacheOff
+      ? `<span class="stat warn" title="개발 서버의 Rails 캐시가 null_store 입니다. bin/rails dev:cache 로 켤 수 있습니다.">Cache ${cache.count}건 · 저장소 꺼짐</span>`
+      : `<span class="stat">Cache ${cache.count}건 ${ms(cache.ms)} · hit ${data.cache_hits} / miss ${data.cache_misses}</span>`;
+    const total = data.kind === "batch" ? "잡 합계" : data.kind === "job" ? "잡" : "요청";
+    const jobs = data.kind === "batch" ? `<span class="stat repeat">잡 ×${data.job_count}</span>` : "";
+    const repeats = data.repeat_count ? `<span class="stat repeat">반복 ${data.repeat_count}곳</span>` : "";
+    return `${jobs}${repeats}${n1}${dup}<span class="stat">PG ${pg.count}건 ${ms(pg.ms)}</span><span class="stat">Redis ${redis.count}건 ${ms(redis.ms)}</span>${cacheStat}${memory}${queryCache}<span class="stat">${total} ${ms(data.total_ms)}</span>`;
+  };
+
+  const list = () => {
+    if (data.kind === "batch") return groupRows(state.view === "issues" ? undefined : state.view);
+    if (state.view === "order") return queryRows(false);
+    if (state.view === "slow") return queryRows(true);
+    return groupRows();
+  };
+
+  const renderList = () => {
+    const target = root.querySelector(".list");
+    if (!target) return;
+    const html = list();
+    target.innerHTML = html || '<p class="empty">표시할 쿼리가 없습니다.</p>';
+  };
+
+  // 같은 요청이 넣은 같은 잡은 묶어서 반복으로 보여 준다. 잡을 나눈 건 의도일 수 있어 N+1 과 구분한다.
+  // 한 잡 안에서 이미 반복된 호출만 N+1 로 남는다.
+  const batchKey = (trace) => (trace.kind === "job" && trace.parent ? `batch:${trace.parent}:${trace.label}` : null);
+
+  const varyingBinds = (rows) => {
+    const unique = [...new Map(rows.map((binds) => [JSON.stringify(binds), binds])).values()];
+    const width = Math.max(0, ...unique.map((binds) => binds.length));
+    const positions = [...Array(width).keys()].filter((index) => new Set(unique.map((binds) => JSON.stringify(binds[index]))).size > 1);
+    return unique.slice(0, 10).map((binds) => positions.map((index) => binds[index]));
+  };
+
+  const mergeTraces = (id, members) => {
+    const startedAt = Math.min(...members.map((member) => member.started_wall_ms));
+    const merged = new Map();
+    const queries = [];
+
+    members.forEach((member) => {
+      const local = member.groups.map((group) => {
+        const key = [group.source, group.shape, group.frames.join("|")].join("\u0000");
+        if (!merged.has(key)) {
+          merged.set(key, { ...group, count: 0, cached_count: 0, total_ms: 0, max_ms: 0, hits: {}, rows: [], signatures: new Set(), kinds: new Set(), first_offset_ms: Infinity, last_end_ms: 0 });
+        }
+        const target = merged.get(key);
+        target.count += group.count;
+        target.cached_count += group.cached_count;
+        target.total_ms += group.total_ms;
+        target.max_ms = Math.max(target.max_ms, group.max_ms);
+        target.rows.push(group.first_binds);
+        target.signatures.add(group.signature);
+        target.kinds.add(group.kind);
+        Object.entries(group.hits).forEach(([name, count]) => { target.hits[name] = (target.hits[name] || 0) + count; });
+        return target;
+      });
+      member.queries.forEach((query) => {
+        const target = local[query.group];
+        const offset = query.offset_ms + member.started_wall_ms - startedAt;
+        target.first_offset_ms = Math.min(target.first_offset_ms, offset);
+        target.last_end_ms = Math.max(target.last_end_ms, offset + query.ms);
+        queries.push({ ...query, target, offset_ms: offset });
+      });
+    });
+
+    const rank = { n_plus_one: 0, job_repeat: 1, duplicate: 2, normal: 3 };
+    const groups = [...merged.values()].map((group) => {
+      const kind = group.kinds.has("n_plus_one") ? "n_plus_one"
+        : group.kinds.has("duplicate") ? "duplicate"
+          : group.judged && group.count >= 2 ? "job_repeat" : "normal";
+      return Object.assign(group, { kind, bind_samples: varyingBinds(group.rows) });
+    }).sort((a, b) => rank[a.kind] - rank[b.kind] || b.total_ms - a.total_ms);
+
+    const sum = (pick) => members.reduce((total, member) => total + pick(member), 0);
+    const source = (key) => ({ count: sum((member) => member.sources[key].count), ms: sum((member) => member.sources[key].ms) });
+    const job = members[0].label;
+
+    return {
+      id,
+      kind: "batch",
+      job,
+      job_count: members.length,
+      members,
+      label: `${job} ×${members.length}`,
+      origin: members[0].origin,
+      parent: members[0].parent,
+      status: members.some((member) => member.status === "실패") ? "실패" : "완료",
+      started_wall_ms: startedAt,
+      total_ms: sum((member) => member.total_ms),
+      span_ms: Math.max(...members.map((member) => member.started_wall_ms - startedAt + member.total_ms)),
+      sources: { pg: source("pg"), redis: source("redis"), cache: source("cache") },
+      cache_hits: sum((member) => member.cache_hits),
+      cache_misses: sum((member) => member.cache_misses),
+      cached_count: sum((member) => member.cached_count),
+      in_memory_count: sum((member) => member.in_memory_count),
+      n_plus_one_count: groups.filter((group) => group.kind === "n_plus_one").length,
+      duplicate_count: groups.filter((group) => group.kind === "duplicate").length,
+      repeat_count: groups.filter((group) => group.kind === "job_repeat").length,
+      groups,
+      queries: queries.sort((a, b) => a.offset_ms - b.offset_ms).map(({ target, ...query }) => ({ ...query, group: groups.indexOf(target), kind: target.kind })),
+    };
+  };
+
+  const displayItems = () => {
+    const batches = new Map();
+    traces.forEach((trace) => {
+      const key = batchKey(trace);
+      if (key) batches.set(key, [...(batches.get(key) || []), trace]);
+    });
+
+    const placed = new Set();
+    return traces.flatMap((trace) => {
+      const key = batchKey(trace);
+      const members = key ? batches.get(key) : [];
+      if (members.length < 2) return [trace];
+      if (placed.has(key)) return [];
+
+      placed.add(key);
+      return [mergeTraces(key, members)];
+    });
+  };
+
+  const findTrace = (id) => traces.find((trace) => trace.id === id) || displayItems().find((trace) => trace.id === id);
+
+  const traceCopy = (trace) => `<button class="trace-copy" data-copy-trace="${escapeHtml(trace.id)}" title="어디서 온 호출인지와 안의 호출 전체를 프롬프트용으로 복사">복사</button>`;
+
+  const batchItem = (batch) => {
+    const open = state.openBatches.has(batch.id);
+    const members = open ? batch.members.map((member) => traceItem(member, true)).join("") : "";
+    return `<div class="batch">
+      <button class="trace ${batch.id === data.id ? "on" : ""} ${batch.n_plus_one_count ? "has-n1" : "has-repeat"}" data-trace="${escapeHtml(batch.id)}">
+        <span class="trace-top"><span class="kind kind-job">잡</span><span class="tag tag-repeat">×${batch.job_count}</span>${batch.n_plus_one_count ? `<span class="tag tag-n1">N+1 ${batch.n_plus_one_count}</span>` : ""}${batch.status === "실패" ? '<span class="tag tag-n1">실패</span>' : ""}<span class="trace-ms">${ms(batch.total_ms)}</span></span>
+        <span class="trace-label">${escapeHtml(batch.job)}</span>
+        <span class="trace-counts">PG ${batch.sources.pg.count} · Redis ${batch.sources.redis.count} · Cache ${batch.sources.cache.count}</span>
+      </button>
+      <button class="batch-toggle" data-batch="${escapeHtml(batch.id)}" aria-expanded="${open}">${open ? "접기" : `${batch.job_count}개 펼치기`}</button>
+      ${traceCopy(batch)}
+      ${members}
+    </div>`;
+  };
+
+  const traceItem = (trace, member = false) => {
+    if (trace.kind === "batch") return batchItem(trace);
+
+    const n1 = trace.n_plus_one_count ? `<span class="tag tag-n1">N+1 ${trace.n_plus_one_count}</span>` : "";
+    const failed = trace.status === "실패" || trace.status >= 500 ? '<span class="tag tag-n1">실패</span>' : "";
+    return `<div class="trace-wrap"><button class="trace ${member ? "member" : ""} ${trace.id === data.id ? "on" : ""} ${trace.n_plus_one_count ? "has-n1" : ""}" data-trace="${trace.id}">
+      <span class="trace-top"><span class="kind kind-${trace.kind}">${KIND_LABEL[trace.kind]}</span>${n1}${failed}<span class="trace-ms">${ms(trace.total_ms)}</span></span>
+      <span class="trace-label">${escapeHtml(trace.label)}</span>
+      <span class="trace-counts">PG ${trace.sources.pg.count} · Redis ${trace.sources.redis.count} · Cache ${trace.sources.cache.count}</span>
+    </button>${traceCopy(trace)}</div>`;
+  };
+
+  const renderTraces = () => {
+    const target = root.querySelector(".traces");
+    if (!target) return;
+    const hint = traces.length < 2 ? '<p class="trace-empty">이 페이지에서 나가는 요청과 잡이 여기에 쌓입니다.</p>' : "";
+    target.innerHTML = displayItems().map((item) => traceItem(item)).join("") + hint;
+  };
+
+  const pillHtml = () => {
+    const n1 = traces.reduce((sum, trace) => sum + trace.n_plus_one_count, 0);
+    const repeats = displayItems().filter((item) => item.kind === "batch");
+    const async = traces.length - 1;
+    return `<button class="pill ${n1 ? "pill-bad" : ""}" data-action="toggle" title="쿼리 패널 열기">
+      ${n1 ? `<span class="pill-n1">N+1 ${n1}</span>` : ""}
+      ${repeats.map((batch) => `<span class="pill-repeat">×${batch.job_count}</span>`).join("")}
+      <span>PG ${page.sources.pg.count}</span><span class="dim">${ms(page.sources.pg.ms)}</span>
+      <span>Redis ${page.sources.redis.count}</span><span>Cache ${page.sources.cache.count}</span>
+      ${async ? `<span class="pill-async">비동기 ${async}</span>` : ""}
+    </button>`;
+  };
+
+  const render = () => {
+    const pill = pillHtml();
+    const views = [["issues", "문제 먼저"], ["order", "실행 순서"], ["slow", "느린 순"]]
+      .map(([key, label]) => `<button class="${state.view === key ? "on" : ""}" data-view="${key}">${label}</button>`).join("");
+    const total = data.queries.filter((query) => !query.cached).length;
+    const sources = [["all", `전체 ${total}`], ...Object.entries(SOURCE).map(([key, source]) => [key, `${source.label} ${data.sources[key].count}`])]
+      .map(([key, label]) => `<button class="${state.source === key ? "on" : ""}" data-source="${key}">${label}</button>`).join("");
+    const panel = state.open ? `<section class="panel" aria-label="쿼리 패널">
+      <header>
+        <div class="title"><strong>${KIND_LABEL[data.kind]}</strong><code>${escapeHtml(data.label)}</code>${data.origin ? `<code class="origin">넣은 곳 ${escapeHtml(data.origin)}</code>` : ""}</div>
+        <div class="stats">${summary()}</div>
+        <button class="close" data-action="toggle" aria-label="닫기">×</button>
+      </header>
+      <div class="body">
+        <nav class="traces" aria-label="요청 목록"></nav>
+        <div class="content">
+          <div class="tools">
+            <div class="views">${views}</div>
+            <div class="views">${sources}</div>
+            <input type="search" placeholder="SQL, 키, 파일, 모델로 찾기" value="${escapeHtml(state.filter)}">
+          </div>
+          <div class="list"></div>
+        </div>
+      </div>
+    </section>` : "";
+    root.innerHTML = `<style>${CSS}</style>${panel}${state.open ? "" : pill}`;
+    renderTraces();
+    renderList();
+  };
+
+  const CSS = `
+    :host { all: initial; }
+    * { box-sizing: border-box; }
+    button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .pill, .panel { font: 12px/1.45 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", sans-serif; color: #d8dee9; }
+    .pill { position: fixed; left: 12px; bottom: 12px; z-index: 2147483000; display: flex; align-items: center; gap: 8px;
+      padding: 6px 10px; border-radius: 8px; background: #161b26; border: 1px solid #2c3444;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, .35); font-variant-numeric: tabular-nums; }
+    .pill-bad { border-color: #e5484d; }
+    .pill-n1 { padding: 1px 6px; border-radius: 4px; background: #e5484d; color: #fff; font-weight: 700; }
+    .dim { color: #8b95a7; }
+    .panel { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147483000; height: 56vh; min-height: 280px;
+      display: flex; flex-direction: column; background: #10141d; border-top: 1px solid #2c3444; box-shadow: 0 -10px 30px rgba(0, 0, 0, .35); }
+    header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 44px 10px 14px; position: relative; border-bottom: 1px solid #222938; }
+    .title { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 0 1 auto; }
+    .title strong { flex: none; font-size: 13px; color: #fff; white-space: nowrap; }
+    .title code { color: #8b95a7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .stats { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; font-variant-numeric: tabular-nums; }
+    .stat { padding: 2px 8px; border-radius: 5px; background: #1b2130; color: #aeb7c6; white-space: nowrap; }
+    .stat.bad { background: #e5484d; color: #fff; font-weight: 700; }
+    .stat.warn { background: #4a3a12; color: #f5c451; }
+    .stat.repeat { background: #f5c451; color: #231a00; font-weight: 700; }
+    .stat.good { background: #15352a; color: #5fd4a0; }
+    .close { position: absolute; top: 8px; right: 12px; width: 26px; height: 26px; border-radius: 6px; font-size: 18px; line-height: 1; color: #8b95a7; }
+    .close:hover { background: #1b2130; color: #fff; }
+    .tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid #222938; }
+    .views { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: #1b2130; }
+    .views button { padding: 3px 10px; border-radius: 5px; color: #aeb7c6; }
+    .views button.on { background: #2f3a4f; color: #fff; }
+    input { flex: 1; min-width: 80px; max-width: 320px; margin-left: auto; padding: 4px 9px; border-radius: 6px;
+      border: 1px solid #2c3444; background: #161b26; color: #d8dee9; font: inherit; outline: none; }
+    input:focus { border-color: #5b8def; }
+    .body { flex: 1; min-height: 0; display: flex; }
+    .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .traces { flex: none; width: 280px; overflow: auto; border-right: 1px solid #222938; }
+    .trace-empty { margin: 0; padding: 12px 10px; color: #8b95a7; font-size: 11.5px; line-height: 1.5; }
+    .trace { display: block; width: 100%; padding: 7px 10px; text-align: left; border-bottom: 1px solid #1b2130; }
+    .trace:hover { background: rgba(255, 255, 255, .03); }
+    .trace.on { background: #1b2130; box-shadow: inset 3px 0 0 #5b8def; }
+    .trace.has-n1 { box-shadow: inset 3px 0 0 #e5484d; }
+    .trace.has-repeat { box-shadow: inset 3px 0 0 #f5c451; }
+    .trace.member { padding-left: 22px; background: #0c1017; }
+    .batch, .trace-wrap { position: relative; }
+    .trace-copy { position: absolute; top: 44px; right: 8px; padding: 0 6px; border-radius: 4px; background: #1b2130; color: #aeb7c6; font-size: 11px; }
+    .trace-copy:hover { color: #fff; background: #2f3a4f; }
+    .trace.on + .trace-copy, .trace.on ~ .trace-copy { background: #2f3a4f; color: #fff; }
+    .batch-toggle { position: absolute; top: 44px; right: 48px; padding: 0 6px; border-radius: 4px; background: #1b2130; color: #aeb7c6; font-size: 11px; }
+    .batch-toggle:hover { color: #fff; background: #2f3a4f; }
+    .title code.origin { flex: none; color: #7fb0ff; }
+    .trace-top { display: flex; align-items: center; gap: 5px; }
+    .trace-ms { margin-left: auto; color: #aeb7c6; font-variant-numeric: tabular-nums; }
+    .trace-label { display: block; margin-top: 2px; color: #fff; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .trace-counts { display: block; color: #8b95a7; font-size: 11px; font-variant-numeric: tabular-nums; }
+    .kind { padding: 0 5px; border-radius: 4px; font-size: 10.5px; font-weight: 700; background: #2f3a4f; color: #d8dee9; }
+    .kind-request { background: #16404a; color: #7fe0f0; }
+    .kind-job { background: #4a3a12; color: #f5c451; }
+    .pill-repeat { padding: 1px 6px; border-radius: 4px; background: #f5c451; color: #231a00; font-weight: 700; }
+    .pill-async { padding: 1px 6px; border-radius: 4px; background: #2f3a4f; color: #fff; }
+    .list { flex: 1; overflow: auto; }
+    .row { position: relative; border-bottom: 1px solid #1b2130; }
+    .row.n_plus_one { background: rgba(229, 72, 77, .09); box-shadow: inset 3px 0 0 #e5484d; }
+    .row.duplicate { box-shadow: inset 3px 0 0 #b98a1f; }
+    .row.job_repeat { background: rgba(245, 196, 81, .07); box-shadow: inset 3px 0 0 #f5c451; }
+    .line { position: relative; display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; column-gap: 10px; align-items: center;
+      width: 100%; padding: 7px 76px 9px 14px; text-align: left; }
+    .line:hover { background: rgba(255, 255, 255, .03); }
+    .tagcell { align-self: start; padding-top: 1px; }
+    .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+    .tag-n1 { background: #e5484d; color: #fff; }
+    .tag-dup { background: #4a3a12; color: #f5c451; }
+    .tag-repeat { background: #f5c451; color: #231a00; }
+    .src { flex: none; padding: 0 5px; border-radius: 4px; font-size: 10.5px; font-weight: 700; }
+    .src-pg { background: #1b3155; color: #9cc2ff; }
+    .src-redis { background: #4c2020; color: #ff9f90; }
+    .src-cache { background: #35264f; color: #cfa9ff; }
+    .main { min-width: 0; }
+    .where { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+    .name { color: #fff; font-weight: 600; white-space: nowrap; }
+    .loc { color: #7fb0ff; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sql { display: block; margin-top: 1px; color: #8b95a7; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .kw { color: #c792ea; }
+    .ident { color: #9fd3c7; }
+    .meta { display: flex; align-items: baseline; gap: 8px; justify-content: flex-end; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .meta b { color: #ff8b8e; font-size: 13px; }
+    .meta b.repeat { color: #f5c451; }
+    .meta em { font-style: normal; color: #8b95a7; }
+    .meta em.hit { color: #5fd4a0; }
+    .meta em.miss { color: #f5c451; }
+    .meta strong { min-width: 52px; text-align: right; color: #fff; font-weight: 600; }
+    .bar, .timeline { position: absolute; left: 70px; right: 14px; bottom: 2px; height: 3px; background: #1b2130; border-radius: 1px; overflow: hidden; }
+    .bar i { display: block; height: 100%; background: #5b8def; }
+    .timeline i { position: absolute; top: 0; bottom: 0; background: #5b8def; }
+    .n_plus_one .bar i, .n_plus_one .timeline i { background: #e5484d; }
+    .job_repeat .bar i, .job_repeat .timeline i { background: #f5c451; }
+    .detail { padding: 2px 14px 12px 70px; }
+    .detail-head { display: flex; align-items: center; justify-content: space-between; }
+    h4 { margin: 8px 0 4px; font-size: 11px; font-weight: 600; color: #8b95a7; }
+    pre { margin: 0; padding: 8px 10px; border-radius: 6px; background: #161b26; color: #d8dee9; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+    .binds { display: block; color: #d8dee9; font-size: 11.5px; word-break: break-all; }
+    ol { margin: 0; padding-left: 18px; color: #aeb7c6; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+    li.first { color: #7fb0ff; }
+    .copy, .rowcopy { padding: 1px 8px; border-radius: 5px; background: #1b2130; color: #aeb7c6; }
+    .copy:hover, .rowcopy:hover { color: #fff; background: #2f3a4f; }
+    .rowcopy { position: absolute; top: 11px; right: 14px; min-width: 52px; padding: 3px 8px; border: 1px solid #2c3444; font-size: 11px; }
+    .n_plus_one .rowcopy { border-color: #7a3134; }
+    .empty { margin: 0; padding: 24px; text-align: center; color: #8b95a7; }
+    @media (max-width: 640px) {
+      header { flex-wrap: wrap; gap: 8px; }
+      .stats { order: 3; width: 100%; margin-left: 0; }
+      .body { flex-direction: column; }
+      .traces { width: 100%; max-height: 112px; border-right: 0; border-bottom: 1px solid #222938; }
+      .line { grid-template-columns: 40px minmax(0, 1fr) auto; padding-right: 70px; }
+      .rowcopy { right: 10px; }
+      .bar, .timeline { left: 14px; }
+      .detail { padding-left: 14px; }
+    }
+  `;
+
+  root.addEventListener("click", (event) => {
+    const target = event.target.closest("button");
+    if (!target) return;
+
+    if (target.dataset.trace) {
+      data = findTrace(target.dataset.trace) || page;
+      state.expanded.clear();
+      render();
+    } else if (target.dataset.batch) {
+      const id = target.dataset.batch;
+      state.openBatches.has(id) ? state.openBatches.delete(id) : state.openBatches.add(id);
+      renderTraces();
+    } else if (target.dataset.action === "toggle") {
+      state.open = !state.open;
+      store(OPEN_KEY, state.open ? "1" : "0");
+      render();
+    } else if (target.dataset.view) {
+      state.view = target.dataset.view;
+      state.expanded.clear();
+      store(VIEW_KEY, state.view);
+      render();
+    } else if (target.dataset.source) {
+      state.source = target.dataset.source;
+      state.expanded.clear();
+      store(SOURCE_KEY, state.source);
+      render();
+    } else if (target.dataset.copyTrace) {
+      const trace = findTrace(target.dataset.copyTrace);
+      if (trace) copy(target, tracePrompt(trace));
+    } else if (target.dataset.copyRow) {
+      copy(target, promptText(target.dataset.copyRow));
+    } else if (target.dataset.copy !== undefined) {
+      copy(target, target.dataset.copy);
+    } else if (target.dataset.toggle) {
+      const id = target.dataset.toggle;
+      state.expanded.has(id) ? state.expanded.delete(id) : state.expanded.add(id);
+      renderList();
+    }
+  });
+
+  root.addEventListener("input", (event) => {
+    if (event.target.matches("input")) {
+      state.filter = event.target.value;
+      renderList();
+    }
+  });
+
+  // 다른 프로세스에서 끝난 요청과 잡을 받아 온다. 페이지가 바뀌면 멈춘다.
+  let cursor = page.started_wall_ms;
+  const seen = new Set([page.id]);
+  const poll = async () => {
+    if (!host.isConnected) return clearInterval(timer);
+    if (document.visibilityState !== "visible") return;
+
+    try {
+      const response = await fetch(`${page.events_path}?page=${page.page_key}&after=${cursor}`, { cache: "no-store" });
+      if (!response.ok) return;
+
+      const fresh = (await response.json()).filter((trace) => !seen.has(trace.id));
+      if (!fresh.length) return;
+
+      fresh.forEach((trace) => seen.add(trace.id));
+      cursor = Math.max(cursor, ...fresh.map((trace) => trace.started_wall_ms));
+      traces = [page, ...[...traces.slice(1), ...fresh].sort((a, b) => b.started_wall_ms - a.started_wall_ms).slice(0, 100)];
+      if (!state.open) return render();
+
+      // 보고 있는 묶음에 잡이 더 도착하면 합계를 다시 그린다. 입력 중인 찾기 칸은 건드리지 않는다.
+      if (data.kind === "batch") {
+        data = findTrace(data.id) || data;
+        root.querySelector(".title code").textContent = data.label;
+        root.querySelector(".stats").innerHTML = summary();
+        renderList();
+      }
+      renderTraces();
+    } catch {}
+  };
+  const timer = setInterval(poll, 1500);
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.open && host.isConnected) {
+      state.open = false;
+      store(OPEN_KEY, "0");
+      render();
+    }
+  });
+
+  render();
+})();
+</script>

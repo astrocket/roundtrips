@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rspec:
+    # ubuntu-latest(26.04) 는 Ruby 4.0 바이너리가 없어 24.04 로 고정한다.
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        ruby: ["3.3", "4.0.1"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+      - run: bundle exec rspec
